@@ -1,5 +1,11 @@
 evnt::handle_events \
-  -event_names {"something-happened"} \
-  -script {
-    ns_write "Hey! Looks like something has happened!\n"
-}
+  -spec {
+      {"something-happened" {
+	      ns_write "Hey! Looks like something has happened!\n"
+	  }
+      }
+      {"something-else-happened" {
+	      ns_write "Wow! Now happened something else!\n"
+	  }
+      }
+  }
