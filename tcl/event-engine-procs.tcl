@@ -68,48 +68,53 @@ ad_proc -private evnt::create_handler {
 	set retval \[list $event_id $mutex_id\]"
 }
 
-ad_proc -private evnt::create_handlers {
-    -queue_id:required
-    -events:required
-} {
-    This proc creates a handler for every event specified.
-} {
-    foreach event $events {
-	create_handler -queue_id $queue_id -event $event
-    }
-}
-
-
 ad_proc -public evnt::handle_events {
-    {-event_names ""}
-    {-script ""}
+    {-spec ""}
     {-max_events_to_handle 10}
 } {
     Handles the events specified, executing the script each time they are triggered.
     Script is upleveled, so it is executed in the environment of the caller.
 } { 
-    set n_events [llength $event_names]
+    set n_events [llength $spec]
+    
+    # No events given.
     if {$n_events == 0} {
-	# No jobs to schedule
 	return
     }
+    
     
     # Get the queue_id...
     set queue_id ::evnt_queue|[ns_conn authuser]|[ns_conn url]|[ns_job genid]
 	    
-    # Create the queue
+    # ...and create the queue.
     ns_job create $queue_id [expr $n_events + 1]
-      
-    # For each event name specified...
-    foreach name $event_names {
-	# ...we obtain a reference to the event...
-	set evnt [evnt::obtain -name $name]
-	# ...and add it to the events to handle.
-	lappend events $evnt
+    
+    
+    # For each event specified...
+    foreach sp $spec {
+	set name [string trim [lindex $sp 0]]
+	set code [string trim [lindex $sp 1]]
+	
+	# ...ignore bogus specifications...
+	if {$name eq "" || $code eq ""} {
+	    continue
+	}
+	
+	# ...obtain a reference to the event...
+	set event [evnt::obtain -name $name]
+	
+	# ...associate the event id with the code to 
+	# be executed when such event fires...
+	set event_id [lindex $event 0]
+	set handlers($event_id) $code
+	
+	# ...and start the handler for the event.
+	create_handler -queue_id $queue_id -event $event
     }
     
-    # Now let's create the handlers!
-    evnt::create_handlers -queue_id $queue_id -events $events
+    # We can free some memory now.
+    unset spec sp n_events name code
+    
     
     # We handle just a limited number of events as a security measure:
     # we can't let users generate neverending requests.
@@ -122,9 +127,14 @@ ad_proc -public evnt::handle_events {
 	    set state [lindex $handler 3]
 	    # ...find the ones which are done...
 	    if {$state == "done"} {
+		set event [lindex $handler 5]
+		
+		set event_id [lindex $event 0]
+		# We execute the code associated with this event in the environment of the caller.
+		uplevel $handlers($event_id)
+		
 		# ...schedule again a handler for the event caught (only if it is not the last execution)...
 		if {$i != $max_events_to_handle} {
-		    set event [lindex $handler 5]
 		    evnt::create_handler -queue_id $queue_id -event $event
 		}
 		
@@ -133,9 +143,6 @@ ad_proc -public evnt::handle_events {
 		ns_job cancel $queue_id $job_id
 	    }
 	}
-	
-	# We execute the script in the environment of the caller
-	uplevel $script
     }
     
     # Delete the queue.
