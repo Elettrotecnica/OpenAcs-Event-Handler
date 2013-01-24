@@ -1,4 +1,5 @@
 evnt::handle_events \
+  -timeout 10 \
   -spec {
       {"something-happened" {
 	      ns_write "Hey! Looks like something has happened!\n"

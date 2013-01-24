@@ -8,6 +8,10 @@ ad_library {
 namespace eval evnt {}
 
 
+#
+### Event procs
+#
+
 ad_proc -private evnt::obtain {
     -name:required
 } {
@@ -55,6 +59,7 @@ ad_proc -public evnt::throw {
 ad_proc -private evnt::create_handler {
     -queue_id:required
     -event:required
+    -timeout:required
 } {
     This proc creates a new job to handle the event specified.
 } {
@@ -62,7 +67,7 @@ ad_proc -private evnt::create_handler {
     set mutex_id [lindex $event 1]
     ns_job queue $queue_id "
 	ns_mutex lock $mutex_id
-	ns_cond wait $event_id $mutex_id
+	ns_cond wait $event_id $mutex_id $timeout
 	ns_mutex unlock $mutex_id
 	
 	set retval \[list $event_id $mutex_id\]"
@@ -70,7 +75,7 @@ ad_proc -private evnt::create_handler {
 
 ad_proc -public evnt::handle_events {
     {-spec ""}
-    {-max_events_to_handle 10}
+    {-timeout 60}
 } {
     Handles the events specified, executing the script each time they are triggered.
     Script is upleveled, so it is executed in the environment of the caller.
@@ -109,34 +114,50 @@ ad_proc -public evnt::handle_events {
 	set handlers($event_id) $code
 	
 	# ...and start the handler for the event.
-	create_handler -queue_id $queue_id -event $event
+	create_handler \
+	    -queue_id $queue_id \
+	    -event    $event \
+	    -timeout  $timeout
     }
     
     # We can free some memory now.
     unset spec sp n_events name code
     
     
-    # We handle just a limited number of events as a security measure:
-    # we can't let users generate neverending requests.
-    for {set i 1} {$i <= $max_events_to_handle} {incr i} {
+    set idle_p f
+    set start_time [clock seconds]
+    
+    # We constantly check if we reached the timeout as a security
+    # measure: we cannot let users generate neverending requests.
+    while {!$idle_p && [clock seconds] - $start_time < $timeout} {
+	
 	# Wait for any of the handlers to fire...
-	ns_job waitany $queue_id
+	set idle_p [catch {ns_job waitany $queue_id $timeout}]
 
 	# ...then loop through the handlers...
 	foreach handler [ns_job joblist $queue_id] {
 	    set state [lindex $handler 3]
+	    set time  [lindex $handler 15]
+	    
 	    # ...find the ones which are done...
 	    if {$state == "done"} {
 		set event [lindex $handler 5]
 		
-		set event_id [lindex $event 0]
-		# We execute the code associated with this event in the environment of the caller.
-		uplevel $handlers($event_id)
-		
-		# ...schedule again a handler for the event caught (only if it is not the last execution)...
-		if {$i != $max_events_to_handle} {
-		    evnt::create_handler -queue_id $queue_id -event $event
+		# ...and if the job ended because of an 
+		# event (not because of the timeout)...
+		if {$time / 1000 < $timeout} {
+		    set event_id [lindex $event 0]
+		    # ...execute the code associated with this 
+		    # event in the environment of the caller.
+		    uplevel $handlers($event_id)
 		}
+		
+		# ...schedule again a handler 
+		# for the event caught...
+		create_handler \
+		    -queue_id $queue_id \
+		    -event    $event \
+		    -timeout  $timeout
 		
 		set job_id [lindex $handler 1]
 		# ...then delete the died handler.
@@ -145,6 +166,12 @@ ad_proc -public evnt::handle_events {
 	}
     }
     
-    # Delete the queue.
+    # When we are done, we clean our own mess:
+    # set the handlers to be removed once they reach the timeout...
+    foreach job_id [ns_job jobs $queue_id] {
+	ns_job cancel $queue_id $job_id
+    }
+    
+    # ...and delete the queue.
     ns_job delete $queue_id
 }
