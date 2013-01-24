@@ -87,6 +87,10 @@ ad_proc -public evnt::handle_events {
 	return
     }
     
+    if {![string is integer $timeout]} {
+	error "Timeout must be an integer."
+    }
+    
     
     # Get the queue_id...
     set queue_id ::evnt_queue|[ns_conn authuser]|[ns_conn url]|[ns_job genid]
